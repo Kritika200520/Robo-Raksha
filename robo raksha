@@ -1,0 +1,118 @@
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+
+// SENSORS SETUP 
+const int flamePin = A0; 
+const int soundPin = A1; 
+const int vibPin = A2;
+
+// GPS & GSM SETUP 
+SoftwareSerial gsmSerial(10, 11); 
+SoftwareSerial gpsSerial(12, 13); 
+TinyGPSPlus gps;
+
+unsigned long lastSmsTime = 0;
+bool dangerState = false;
+
+void setup() {
+  Serial.begin(9600);   
+  gsmSerial.begin(9600); 
+  gpsSerial.begin(9600); 
+  
+  Serial.println(F("--------------------------------------"));
+  Serial.println(F("RADAR BRAIN: ONLINE & SCANNING"));
+  Serial.println(F("Searching for GPS Satellites..."));
+  Serial.println(F("--------------------------------------"));
+}
+
+void loop() {
+  //  Read Analog Danger Sensors
+  int flameVal = analogRead(flamePin);
+  int soundVal = analogRead(soundPin);
+  int vibVal = analogRead(vibPin);
+
+  // Listen to GPS for Location
+  gpsSerial.listen(); 
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+  }
+
+  // Print Live Dashboard to Serial Monitor
+  Serial.print(F("Flame: ")); Serial.print(flameVal); 
+  Serial.print(F(" | Sound: ")); Serial.print(soundVal); 
+  Serial.print(F(" | Vib: ")); Serial.print(vibVal);
+  Serial.print(F(" || GPS: "));
+  
+  if (gps.location.isValid()) {
+    Serial.print(gps.location.lat(), 6); Serial.print(F(", ")); Serial.println(gps.location.lng(), 6);
+  } else {
+    Serial.println(F("Searching"));
+  }
+
+  // DETECTION LOGIC
+  bool currentDanger = false;
+  String dangerType = "";
+
+  // Thresholds check 
+  if (flameVal < 500) { currentDanger = true; dangerType = "FIRE"; }
+  else if (vibVal > 800) { currentDanger = true; dangerType = "VIBRATION"; }
+  else if (soundVal > 800) { currentDanger = true; dangerType = "LOUD NOISE"; }
+
+  //  ACTION & SMS 
+  if (currentDanger) {
+    if (!dangerState) {
+      Serial.println(F("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"));
+      Serial.print(F(">>> DANGER DETECTED: ")); Serial.print(dangerType); Serial.println(F(" <<<"));
+      dangerState = true;
+      
+      // Send SMS only once every 30 seconds
+      if (millis() - lastSmsTime > 30000) {
+        sendSMS(dangerType, flameVal, soundVal, vibVal);
+        lastSmsTime = millis();
+      } else {
+        Serial.println(F("SMS Cooldown Active. Please wait..."));
+      }
+      Serial.println(F("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"));
+    }
+  } else {
+    dangerState = false; 
+  }
+
+  delay(500);
+}
+
+// SMS FUNCTION 
+void sendSMS(String alert, int f, int s, int v) {
+  Serial.println(F("INITIATING SMS PROTOCOL..."));
+  
+  // Switch listening from GPS to GSM
+  gsmSerial.listen(); 
+  delay(500);
+
+  // Generate Google Maps Link
+  String lat = String(gps.location.lat(), 6);
+  String lng = String(gps.location.lng(), 6);
+  String mapLink = "Loc: http://maps.google.com/?q=" + lat + "," + lng;
+
+  gsmSerial.println(F("AT+CMGF=1")); 
+  delay(500);
+  
+  // Insert number
+  gsmSerial.println(F("AT+CMGS=\"+919995622878\"")); 
+  delay(500);
+  
+  gsmSerial.print(F("ROBO RAKSHA ALERT: ")); gsmSerial.println(alert);
+  gsmSerial.print(F("Flame:")); gsmSerial.print(f);
+  gsmSerial.print(F(" Snd:")); gsmSerial.print(s);
+  gsmSerial.print(F(" Vib:")); gsmSerial.println(v);
+  gsmSerial.print(mapLink);
+  
+  delay(100);
+  gsmSerial.write(26); 
+  delay(3000);
+  
+  Serial.println(F(" >>> SMS SENT SUCCESSFULLY! <<<"));
+  
+  // Switch back to GPS listening
+  gpsSerial.listen(); 
+}
